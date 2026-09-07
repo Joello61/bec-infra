@@ -26,6 +26,16 @@ Si un PostgreSQL local tourne déjà sur le port 5432, définir `POSTGRES_HOST_P
 
 Les secrets applicatifs réels (OAuth, Twilio, `JWT_PASSPHRASE`, Mercure...) vivent dans `bec-backend/.env` et `bec-frontend/.env.local` (gitignorés), montés en volume — jamais dupliqués ici.
 
+## Lancer les tests backend
+
+Toujours dans le conteneur `backend`, jamais avec un PHP/PostgreSQL natif sur la machine hôte (c'est tout le sens de la portabilité de la Phase D0). `config/packages/doctrine.yaml` de `bec-backend` isole automatiquement la base de test par suffixe (`dbname_suffix: _test`), mais cette base n'existe pas tant qu'elle n'a pas été créée une première fois sur le volume Postgres du compose :
+
+```bash
+docker compose exec backend php bin/console doctrine:database:create --env=test   # première fois uniquement, ou après un docker compose down -v
+docker compose exec backend php bin/console doctrine:migrations:migrate --env=test --no-interaction
+docker compose exec backend php bin/phpunit --testdox
+```
+
 ## Arrêter
 
 ```bash
