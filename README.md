@@ -20,7 +20,7 @@ docker compose up -d
 docker compose exec backend php bin/console doctrine:migrations:migrate --no-interaction   # première fois uniquement
 ```
 
-Application disponible sur `http://localhost:8000`. Hub Mercure sur `http://localhost:3001/.well-known/mercure`.
+Application disponible sur `http://localhost:8000`. Hub Mercure sur `http://localhost:3001/.well-known/mercure`. Emails capturés par Mailpit (jamais livrés réellement) sur `http://localhost:8025`.
 
 Si un PostgreSQL local tourne déjà sur le port 5432, définir `POSTGRES_HOST_PORT` avant de démarrer (ex. `POSTGRES_HOST_PORT=55432 docker compose up -d`, ou dans un `.env` local à ce dépôt, jamais committé).
 
