@@ -1,0 +1,183 @@
+# Environnement de développement local pour Cobage (Bagage Express Cameroun).
+# Phase D0 (bec-docs/docs/deploiement/deploiement-cobage.md, §6.0) : `docker compose up`
+# doit suffire à démarrer l'application localement, sans PostgreSQL/Mercure installés sur
+# la machine hôte. Patron repris de factu_sentinel/docker-compose.yml (même stack), avec
+# deux différences propres à Cobage : pas de Redis (Messenger utilise le transport
+# Doctrine), et un service Mercure (absent de factu_sentinel).
+#
+# Contextes de build en chemins relatifs (../bec-backend, ../bec-frontend) : Cobage est
+# multi-dépôts (contrairement à factu_sentinel, monorepo), ce dépôt bec-infra vit en sibling
+# des dépôts applicatifs, pas au-dessus d'eux dans une arborescence commune versionnée.
+#
+# Identifiants ci-dessous : valeurs de développement local uniquement, jamais utilisées en
+# production (bec-docs CLAUDE.md, section 10 : aucun secret réel ne doit être commité) - les
+# vrais secrets applicatifs (OAuth, Twilio, JWT_PASSPHRASE...) vivent dans bec-backend/.env
+# et bec-frontend/.env.local (gitignorés, montés en volume, jamais dupliqués ici).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cobage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cobage}
+      POSTGRES_DB: ${POSTGRES_DB:-bagage_express}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      # Port hôte configurable : évite un conflit si un PostgreSQL local tourne déjà sur 5432.
+      - '127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-cobage} -d ${POSTGRES_DB:-bagage_express}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Hub Mercure officiel (dunglas/mercure) - absent de factu_sentinel, nécessaire ici
+  # (config/packages/mercure.yaml de bec-backend). Publié sur l'hôte à 127.0.0.1:3001,
+  # cohérent avec MERCURE_PUBLIC_URL déjà présent dans bec-backend/.env et
+  # bec-frontend/.env.local (http://localhost:3001/.well-known/mercure) - le navigateur
+  # tourne sur la machine hôte, où ce port sera bien publié.
+  mercure:
+    image: dunglas/mercure
+    environment:
+      SERVER_NAME: ':80'
+      MERCURE_PUBLISHER_JWT_KEY: ${MERCURE_JWT_SECRET:-devsecretdevsecretdevsecretdevsecret}
+      MERCURE_SUBSCRIBER_JWT_KEY: ${MERCURE_SUBSCRIBER_JWT_KEY:-devsecretdevsecretdevsecretdevsecret}
+      MERCURE_EXTRA_DIRECTIVES: |
+        cors_origins http://localhost:8000
+    ports:
+      - '127.0.0.1:3001:80'
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost/healthz']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ../bec-backend
+      target: dev
+    environment:
+      # bec-backend/.env (réel, monté ci-dessous) pointe DATABASE_URL/MERCURE_URL vers
+      # 127.0.0.1/localhost - à l'intérieur d'un conteneur, ces deux valeurs désignent le
+      # conteneur lui-même, pas les services "postgres"/"mercure". Seules ces variables
+      # (et JWT_COOKIE_SECURE, ci-dessous) ont besoin d'être surchargées ; tout le reste
+      # (secrets OAuth, Twilio, JWT_PASSPHRASE...) vient de .env tel quel, jamais dupliqué
+      # ici.
+      DATABASE_URL: 'postgresql://${POSTGRES_USER:-cobage}:${POSTGRES_PASSWORD:-cobage}@postgres:5432/${POSTGRES_DB:-bagage_express}?serverVersion=16&charset=utf8'
+      MERCURE_URL: 'http://mercure/.well-known/mercure'
+      # MERCURE_JWT_SECRET/MERCURE_SUBSCRIBER_JWT_KEY : le service "mercure" ci-dessus
+      # tourne comme un hub local dédié à ce compose, distinct de celui référencé par
+      # bec-backend/.env (secret réel, différent) - sans cette surcharge, l'app signerait
+      # ses jetons de publication avec un secret que CE hub-ci ne connaît pas, et toute
+      # publication Mercure échouerait en 401 ("Failed to send an update.", constaté à la
+      # vérification de cette phase - App\Service\RealtimeNotifier, déclenché entre autres
+      # par l'inscription). Mêmes variables, même valeur par défaut que le service
+      # "mercure" plus bas, jamais dupliquée en dur.
+      MERCURE_JWT_SECRET: ${MERCURE_JWT_SECRET:-devsecretdevsecretdevsecretdevsecret}
+      MERCURE_SUBSCRIBER_JWT_KEY: ${MERCURE_SUBSCRIBER_JWT_KEY:-devsecretdevsecretdevsecretdevsecret}
+      # Le pont nginx de dev sert du HTTP simple (pas de TLS) - avec Secure=true (valeur
+      # de bec-backend/.env, pertinente en prod HTTPS), le navigateur refuserait de
+      # stocker le cookie JWT sur http://localhost:8000, cassant silencieusement toute
+      # authentification.
+      JWT_COOKIE_SECURE: 'false'
+    volumes:
+      - ../bec-backend:/app
+      - backend_vendor:/app/vendor
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mercure:
+        condition: service_healthy
+    expose:
+      - '9000'
+
+  # Worker Messenger (transport "async" - emails, SMS, notifications). Même image que
+  # "backend", commande différente - jamais un second point d'entrée HTTP.
+  worker:
+    build:
+      context: ../bec-backend
+      target: dev
+    entrypoint: ['docker-entrypoint-worker-dev.sh']
+    command: php bin/console messenger:consume async --limit=100 --memory-limit=256M --time-limit=3600 -vv
+    # --time-limit fait volontairement sortir ce process avec le code 0 après 1h (pratique
+    # Symfony Messenger courante, évite l'accumulation de fuites mémoire d'un process PHP
+    # long-lived) - sans cette politique de redémarrage, cette sortie volontaire deviendrait
+    # une panne silencieuse et définitive du traitement asynchrone.
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: 'postgresql://${POSTGRES_USER:-cobage}:${POSTGRES_PASSWORD:-cobage}@postgres:5432/${POSTGRES_DB:-bagage_express}?serverVersion=16&charset=utf8'
+      MERCURE_URL: 'http://mercure/.well-known/mercure'
+      # Même raison que sur "backend" ci-dessus : ce worker publie aussi sur Mercure
+      # (App\Service\RealtimeNotifier), doit signer avec le secret du hub local.
+      MERCURE_JWT_SECRET: ${MERCURE_JWT_SECRET:-devsecretdevsecretdevsecretdevsecret}
+      MERCURE_SUBSCRIBER_JWT_KEY: ${MERCURE_SUBSCRIBER_JWT_KEY:-devsecretdevsecretdevsecretdevsecret}
+    volumes:
+      - ../bec-backend:/app
+      - backend_vendor:/app/vendor
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mercure:
+        condition: service_healthy
+
+  # Worker Scheduler (transport "scheduler_expiration" - expiration des voyages/demandes).
+  # Même image/pattern que "worker" ci-dessus, commande différente.
+  scheduler:
+    build:
+      context: ../bec-backend
+      target: dev
+    entrypoint: ['docker-entrypoint-worker-dev.sh']
+    command: php bin/console messenger:consume scheduler_expiration --limit=50 --memory-limit=128M --time-limit=7200 -vv
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: 'postgresql://${POSTGRES_USER:-cobage}:${POSTGRES_PASSWORD:-cobage}@postgres:5432/${POSTGRES_DB:-bagage_express}?serverVersion=16&charset=utf8'
+      MERCURE_URL: 'http://mercure/.well-known/mercure'
+      # Même raison que sur "backend" ci-dessus : ce worker publie aussi sur Mercure
+      # (App\Service\RealtimeNotifier), doit signer avec le secret du hub local.
+      MERCURE_JWT_SECRET: ${MERCURE_JWT_SECRET:-devsecretdevsecretdevsecretdevsecret}
+      MERCURE_SUBSCRIBER_JWT_KEY: ${MERCURE_SUBSCRIBER_JWT_KEY:-devsecretdevsecretdevsecretdevsecret}
+    volumes:
+      - ../bec-backend:/app
+      - backend_vendor:/app/vendor
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mercure:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ../bec-frontend
+      target: dev
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ../bec-frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_next_cache:/app/.next
+    expose:
+      - '3000'
+
+  # Pont : seul point d'entrée publié, /api/ -> backend, /uploads/ -> fichiers statiques
+  # (avatars, servis directement par nginx - pas de route Symfony dédiée, spécifique à
+  # Cobage), / -> frontend. Port 8000, pas 8080 (différent de factu_sentinel) :
+  # bec-backend/.env a déjà APP_BASE_DOMAIN et les redirect URIs OAuth Google/Facebook
+  # codés en dur sur http://localhost:8000 - choisir ce port évite de casser l'OAuth.
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./docker/nginx/dev.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../bec-backend/public/uploads:/usr/share/nginx/uploads:ro
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - '127.0.0.1:8000:80'
+
+volumes:
+  postgres_data:
+  backend_vendor:
+  frontend_node_modules:
+  frontend_next_cache:
