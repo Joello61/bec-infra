@@ -82,12 +82,22 @@ services:
       # bec-backend/.env (réel, monté ci-dessous) pointe DATABASE_URL/MERCURE_URL vers
       # 127.0.0.1/localhost - à l'intérieur d'un conteneur, ces deux valeurs désignent le
       # conteneur lui-même, pas les services "postgres"/"mercure". Seules ces variables
-      # (et JWT_COOKIE_SECURE, ci-dessous) ont besoin d'être surchargées ; tout le reste
-      # (secrets OAuth, Twilio, JWT_PASSPHRASE...) vient de .env tel quel, jamais dupliqué
-      # ici.
+      # (et JWT_COOKIE_SECURE/FRONTEND_URL, ci-dessous) ont besoin d'être surchargées ;
+      # tout le reste (secrets OAuth, Twilio, JWT_PASSPHRASE...) vient de .env tel quel,
+      # jamais dupliqué ici.
       DATABASE_URL: 'postgresql://${POSTGRES_USER:-cobage}:${POSTGRES_PASSWORD:-cobage}@postgres:5432/${POSTGRES_DB:-bagage_express}?serverVersion=18&charset=utf8'
       MERCURE_URL: 'http://mercure/.well-known/mercure'
       MAILER_DSN: 'smtp://mailpit:1025'
+      # FRONTEND_URL vaut http://localhost:3000 dans .env (correct pour un dev non-
+      # dockerisé, où symfony server:start/npm run dev tournent chacun sur leur propre
+      # port sans pont) - AuthController::googleCallback()/facebookCallback()
+      # (redirection post-OAuth) et EmailService::sendPasswordResetEmail() (lien dans
+      # l'email) construisent tous les deux leurs URL à partir de cette variable. Avec
+      # le pont nginx de dev, le frontend n'est joignable par le navigateur QUE via
+      # localhost:8000 (port 3000 seulement "expose", jamais publié sur l'hôte) - sans
+      # cette surcharge, la redirection Google OAuth partait vers localhost:3000
+      # (inatteignable), constaté par l'utilisateur.
+      FRONTEND_URL: 'http://localhost:8000'
       # MERCURE_JWT_SECRET/MERCURE_SUBSCRIBER_JWT_KEY : le service "mercure" ci-dessus
       # tourne comme un hub local dédié à ce compose, distinct de celui référencé par
       # bec-backend/.env (secret réel, différent) - sans cette surcharge, l'app signerait
