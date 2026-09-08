@@ -18,9 +18,13 @@ Doit vivre en sibling de `bec-backend/` et `bec-frontend/` (chemins relatifs dan
 cd bec-infra
 docker compose up -d
 docker compose exec backend php bin/console doctrine:migrations:migrate --no-interaction   # première fois uniquement
+docker compose exec backend php -d memory_limit=1G bin/console app:import-geodata          # première fois uniquement (~3 min, ~40k villes)
+docker compose exec backend php bin/console app:seed:currency                              # première fois uniquement
 ```
 
-Application disponible sur `http://localhost:8000`. Hub Mercure sur `http://localhost:3001/.well-known/mercure`. Emails capturés par Mailpit (jamais livrés réellement) sur `http://localhost:8025`.
+Application disponible sur `http://localhost:8000` — toujours ce nom d'hôte, jamais `127.0.0.1` : `JWT_COOKIE_DOMAIN=localhost` (`bec-backend/.env`) fait qu'un cookie de session posé pour `localhost` n'est jamais envoyé par le navigateur à `127.0.0.1`, malgré la même boucle locale (constaté en Phase 7b-A, `bec-docs/docs/plan-correction/plan-correction-cobage.md`). Hub Mercure sur `http://localhost:3001/.well-known/mercure`. Emails capturés par Mailpit (jamais livrés réellement) sur `http://localhost:8025`.
+
+Sans les deux commandes de seed ci-dessus, `countries`/`cities`/`currencies` restent vides : la sélection de ville dans les formulaires de voyage/demande n'affiche jamais de résultat, et compléter son profil plante en 500 (`AddressService` ne trouve aucun pays correspondant). `memory_limit=1G` sur `app:import-geodata` : l'import des ~40k villes dépasse la limite par défaut de PHP (128M) autour de 15-20% de progression.
 
 Si un PostgreSQL local tourne déjà sur le port 5432, définir `POSTGRES_HOST_PORT` avant de démarrer (ex. `POSTGRES_HOST_PORT=55432 docker compose up -d`, ou dans un `.env` local à ce dépôt, jamais committé).
 
