@@ -157,6 +157,19 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_healthy
+    # Le HEALTHCHECK hérité de l'image (bec-backend/Dockerfile) teste le port FastCGI
+    # 9000 de php-fpm - ce service ne lance jamais php-fpm (command ci-dessus), donc ce
+    # port n'écoute jamais ici et le conteneur restait "unhealthy" en permanence même en
+    # fonctionnement normal (constaté après le redémarrage à froid de cette Phase D0).
+    # Le vrai signal de santé est la présence du process messenger:consume lui-même.
+    # start_period généreux : entrypoint-worker-dev.sh attend jusqu'à 120s le marqueur
+    # de "backend" avant même de lancer cette commande.
+    healthcheck:
+      test: ['CMD', 'pgrep', '-f', 'messenger:consume']
+      interval: 10s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
 
   # Worker Scheduler (transport "scheduler_expiration" - expiration des voyages/demandes).
   # Même image/pattern que "worker" ci-dessus, commande différente.
@@ -185,6 +198,14 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_healthy
+    # Même raison que sur "worker" ci-dessus : ce service ne lance jamais php-fpm, le
+    # HEALTHCHECK hérité de l'image (port 9000) restait donc "unhealthy" en permanence.
+    healthcheck:
+      test: ['CMD', 'pgrep', '-f', 'messenger:consume']
+      interval: 10s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
 
   frontend:
     build:
