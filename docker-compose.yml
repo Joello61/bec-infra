@@ -13,6 +13,16 @@
 # production (bec-docs CLAUDE.md, section 10 : aucun secret réel ne doit être commité) - les
 # vrais secrets applicatifs (OAuth, Twilio, JWT_PASSPHRASE...) vivent dans bec-backend/.env
 # et bec-frontend/.env.local (gitignorés, montés en volume, jamais dupliqués ici).
+#
+# Services strictement dev (ex. Mailpit, sans équivalent en production) vivent dans
+# docker-compose.override.yml, jamais ici (Phase D2) : Compose fusionne
+# automatiquement ce fichier avec celui-ci pour un simple "docker compose up" sans "-f"
+# (comportement documenté officiellement, aucune configuration nécessaire), alors que la
+# production liste ses fichiers explicitement (docker-compose.prod.yml, etc.) et ne le
+# charge donc jamais. Un service placé ici plutôt que là-bas se retrouverait fusionné en
+# production sans qu'aucun override ne puisse jamais le retirer (Compose ne fusionne les
+# listes/objets qu'en ajout, il n'existe aucun mécanisme pour supprimer un service entier
+# d'un fichier de base).
 
 services:
   postgres:
@@ -50,26 +60,6 @@ services:
       - '127.0.0.1:3001:80'
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost/healthz']
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  # Mailpit - capture tous les emails envoyés par l'app sans jamais les livrer réellement,
-  # web UI pour les consulter. bec-backend/.env pointe déjà MAILER_DSN vers
-  # smtp://localhost:1025 (le port SMTP par défaut de Mailpit) sans qu'aucun service ne
-  # l'ait jamais fait tourner jusqu'ici - EmailService::send() catch puis relance
-  # TransportExceptionInterface, donc pas de 500 sans ce service (les appelants comme
-  # AuthService::register()/resetPassword() catchent à leur tour), mais tout email
-  # (vérification, réinitialisation de mot de passe...) échouait silencieusement, invisible
-  # en dev. Brevo est prévu pour la production (nouvelle dépendance symfony/brevo-mailer à
-  # ajouter, cf. deploiement-cobage.md D2/D3 - resend-mailer est actuellement installé, pas
-  # Brevo) - hors périmètre ici, Mailpit ne concerne que le développement local.
-  mailpit:
-    image: axllent/mailpit:v1.31.1
-    ports:
-      - '127.0.0.1:8025:8025'
-    healthcheck:
-      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8025/']
       interval: 5s
       timeout: 3s
       retries: 10

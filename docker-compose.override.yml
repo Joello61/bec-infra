@@ -1,0 +1,25 @@
+# Services strictement dev, sans équivalent en production - Compose fusionne
+# automatiquement ce fichier avec docker-compose.yml pour un simple "docker compose up"
+# sans "-f" (comportement documenté officiellement du nom de fichier "docker-compose.
+# override.yml"), jamais chargé par la production (docker/deploy/ssh-deploy.sh liste ses
+# fichiers explicitement). Voir docker-compose.yml pour le raisonnement complet (Phase D2) :
+# c'est le seul mécanisme Compose permettant qu'un service n'existe tout simplement pas en
+# production, aucun override ne pouvant jamais supprimer un service défini dans un fichier
+# de base.
+
+services:
+  # Capture tous les emails envoyés par l'app sans jamais les livrer réellement, web UI
+  # pour les consulter. bec-backend/.env pointe MAILER_DSN vers smtp://localhost:1025 (le
+  # port SMTP par défaut de Mailpit) - EmailService::send() catch puis relance
+  # TransportExceptionInterface (pas de 500 sans ce service, mais tout email échouait
+  # silencieusement, invisible en dev, avant l'ajout de ce service en Phase D0). Brevo est
+  # utilisé en production (Phase D1/D2, relais SMTP générique - voir docker-compose.prod.yml).
+  mailpit:
+    image: axllent/mailpit:v1.31.1
+    ports:
+      - '127.0.0.1:8025:8025'
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8025/']
+      interval: 5s
+      timeout: 3s
+      retries: 10
