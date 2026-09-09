@@ -1,2 +1,7 @@
 .env
 .env.local
+.env.staging
+.env.production
+
+# Nom de routeur propre à chaque environnement (Phase D2) - seul le .example est committé.
+docker-compose.prod.traefik.yml
