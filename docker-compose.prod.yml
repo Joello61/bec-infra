@@ -1,0 +1,230 @@
+# Overlay de production - staging ET production l'utilisent identiquement, la séparation
+# se fait uniquement via l'environnement Infisical chargé au déploiement (jamais via ce
+# fichier) - même principe que factu_sentinel (/data/projet/factu_sentinel/docker-compose.prod.yml).
+# Jamais fusionné dans docker-compose.yml (dev).
+#
+# Usage (jamais directement - toujours via docker/deploy/ssh-deploy.sh, bec-backend/
+# bec-frontend) :
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     -f docker-compose.prod.traefik.yml [-f docker-compose.prod.observability.yml] up -d
+#
+# Modèle de déploiement (Phase D4) : les images sont construites et poussées vers GHCR par
+# la CI de chaque dépôt applicatif (bec-backend, bec-frontend), jamais reconstruites sur le
+# serveur - "docker compose pull" avant tout "up -d" rend la clause "build" du fichier de
+# base sans effet en pratique, explicitement supprimée ci-dessous plutôt que de reposer sur
+# cette seule discipline opérationnelle (Fail Secure).
+#
+# TLS/edge public : géré par Traefik (infrastructure de niveau serveur, hors de ce dépôt).
+# "nginx" ci-dessous n'est plus qu'un pont HTTP -> FastCGI/proxy interne, jamais exposé
+# directement au réseau hôte.
+#
+# Variables attendues - voir .env.prod.example (jamais committé en valeurs réelles) :
+#   PUBLIC_DOMAIN, BACKEND_IMAGE, FRONTEND_IMAGE (GHCR, tag = SHA court),
+#   CORS_ALLOW_ORIGIN, FRONTEND_URL, HSTS_ENABLED, POSTGRES_*, MAILER_DSN/MAILER_FROM,
+#   APP_SECRET, JWT_PASSPHRASE, METRICS_SCRAPE_TOKEN, TEMPO_OTLP_ENDPOINT,
+#   MERCURE_JWT_SECRET/MERCURE_SUBSCRIBER_JWT_KEY, R2_ENDPOINT/R2_ACCESS_KEY_ID/
+#   R2_SECRET_ACCESS_KEY/R2_BUCKET/R2_PUBLIC_URL.
+#
+# Rappels vérifiés avec "docker compose config" (jamais supposés) :
+# - La fusion par défaut de Compose pour les listes ("ports", "volumes", "networks") est un
+#   AJOUT (fusion par clé unique), jamais un remplacement - une liste vide dans un override
+#   ne retire donc rien du fichier de base. Chaque endroit ci-dessous qui doit réellement
+#   remplacer/supprimer (jamais ajouter à) une clé du fichier de base utilise explicitement
+#   les tags "!override"/"!reset" (Compose Specification).
+# - 3 process backend (backend/worker/scheduler), contrairement à factu_sentinel
+#   (backend/worker uniquement) - RUN_MODE différent, mêmes règles JWT/réseau pour les deux
+#   workers.
+# - Pas de service "mailer" dédié : Brevo est utilisé en relais SMTP générique
+#   (MAILER_DSN=smtp://...@smtp-relay.brevo.com:587), symfony/mailer le gère nativement,
+#   aucune nouvelle dépendance ni service Compose nécessaire.
+# - Pas de volume d'upload avatars : Phase D1, AvatarService bascule sur Cloudflare R2
+#   (Flysystem, adaptateur S3) en production - aucun fichier utilisateur sur le disque du
+#   conteneur/volume Docker.
+
+services:
+  backend:
+    image: '${BACKEND_IMAGE}'
+    build: !reset null
+    pull_policy: always
+    # "mailpit" (fichier de base) n'existe plus en production (docker-compose.override.yml,
+    # jamais chargé ici) - sans ce "!override", Compose refuserait de démarrer
+    # ("depends on undefined service", vérifié avec "docker compose config").
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+      mercure:
+        condition: service_healthy
+    volumes: !override
+      - jwt_keys:/app/config/jwt
+    environment:
+      APP_ENV: prod
+      APP_DEBUG: '0'
+      CORS_ALLOW_ORIGIN: '${CORS_ALLOW_ORIGIN}'
+      FRONTEND_URL: '${FRONTEND_URL}'
+      HSTS_ENABLED: '${HSTS_ENABLED:-false}'
+      # Le fichier de base (dev) le force à 'false' pour le nginx-pont HTTP de dev - sans
+      # cette surcharge, le cookie JWT de production (servi en HTTPS derrière Traefik)
+      # hériterait de cette valeur de dev, jamais posé "Secure" (constaté avec
+      # "docker compose config" avant correction).
+      JWT_COOKIE_SECURE: 'true'
+      APP_SECRET: '${APP_SECRET}'
+      JWT_PASSPHRASE: '${JWT_PASSPHRASE}'
+      DATABASE_URL: 'postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?serverVersion=18&charset=utf8'
+      MAILER_DSN: '${MAILER_DSN}'
+      MAILER_FROM: '${MAILER_FROM}'
+      MERCURE_URL: 'http://mercure/.well-known/mercure'
+      MERCURE_PUBLIC_URL: '${MERCURE_PUBLIC_URL}'
+      MERCURE_JWT_SECRET: '${MERCURE_JWT_SECRET}'
+      MERCURE_SUBSCRIBER_JWT_KEY: '${MERCURE_SUBSCRIBER_JWT_KEY}'
+      # Phase D1 - scrapé par Prometheus (infrastructure partagée), jamais exposé que par
+      # "backend" (GetMetricsController).
+      METRICS_SCRAPE_TOKEN: '${METRICS_SCRAPE_TOKEN}'
+      TEMPO_OTLP_ENDPOINT: '${TEMPO_OTLP_ENDPOINT}'
+      # Phase D1 - Flysystem/S3, adaptateur R2 (when@prod, bec-backend/config/services.yaml).
+      R2_ENDPOINT: '${R2_ENDPOINT}'
+      R2_ACCESS_KEY_ID: '${R2_ACCESS_KEY_ID}'
+      R2_SECRET_ACCESS_KEY: '${R2_SECRET_ACCESS_KEY}'
+      R2_BUCKET: '${R2_BUCKET}'
+      R2_PUBLIC_URL: '${R2_PUBLIC_URL}'
+    restart: unless-stopped
+    # "observability-shared" (export OTLP vers "tempo:4318") n'est PAS ici - vit dans
+    # docker-compose.prod.observability.yml, chargé uniquement en production (voir ce
+    # fichier pour le raisonnement, patron factu_sentinel).
+
+  # "entrypoint" de base (docker-compose.yml) est spécifique au dev :
+  # entrypoint-worker-dev.sh attend un bind-mount partagé avec "backend" qui n'existe pas
+  # ici (image déjà construite, rien à attendre). "!override []" désactive entièrement
+  # l'ENTRYPOINT de l'image, y compris celui du Dockerfile (docker-entrypoint-prod.sh,
+  # génération des clés JWT) - volontaire : "worker" ne gère aucune route HTTP/JWT et ne
+  # doit JAMAIS générer les clés en parallèle de "backend" sur le même volume "jwt_keys"
+  # (deux écritures concurrentes corrompent la clé, incident réel documenté chez
+  # factu_sentinel). "command" (fichier de base) s'exécute donc directement comme PID 1.
+  worker:
+    image: '${BACKEND_IMAGE}'
+    build: !reset null
+    pull_policy: always
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+      mercure:
+        condition: service_healthy
+    volumes: !override []
+    entrypoint: !override []
+    environment:
+      APP_ENV: prod
+      APP_DEBUG: '0'
+      APP_SECRET: '${APP_SECRET}'
+      DATABASE_URL: 'postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?serverVersion=18&charset=utf8'
+      MAILER_DSN: '${MAILER_DSN}'
+      MAILER_FROM: '${MAILER_FROM}'
+      MERCURE_URL: 'http://mercure/.well-known/mercure'
+      MERCURE_JWT_SECRET: '${MERCURE_JWT_SECRET}'
+      MERCURE_SUBSCRIBER_JWT_KEY: '${MERCURE_SUBSCRIBER_JWT_KEY}'
+      TEMPO_OTLP_ENDPOINT: '${TEMPO_OTLP_ENDPOINT}'
+    restart: unless-stopped
+    # "observability-shared" n'est PAS ici, voir le commentaire correspondant sur "backend".
+
+  # Même raisonnement que "worker" ci-dessus (jamais de génération JWT concurrente).
+  scheduler:
+    image: '${BACKEND_IMAGE}'
+    build: !reset null
+    pull_policy: always
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+      mercure:
+        condition: service_healthy
+    volumes: !override []
+    entrypoint: !override []
+    environment:
+      APP_ENV: prod
+      APP_DEBUG: '0'
+      APP_SECRET: '${APP_SECRET}'
+      DATABASE_URL: 'postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?serverVersion=18&charset=utf8'
+      MAILER_DSN: '${MAILER_DSN}'
+      MAILER_FROM: '${MAILER_FROM}'
+      MERCURE_URL: 'http://mercure/.well-known/mercure'
+      MERCURE_JWT_SECRET: '${MERCURE_JWT_SECRET}'
+      MERCURE_SUBSCRIBER_JWT_KEY: '${MERCURE_SUBSCRIBER_JWT_KEY}'
+      TEMPO_OTLP_ENDPOINT: '${TEMPO_OTLP_ENDPOINT}'
+    restart: unless-stopped
+
+  frontend:
+    image: '${FRONTEND_IMAGE}'
+    build: !reset null
+    pull_policy: always
+    volumes: !override []
+    environment:
+      NODE_ENV: production
+    restart: unless-stopped
+
+  postgres:
+    restart: unless-stopped
+    # Jamais publié sur l'hôte en production (contrairement au 127.0.0.1:${POSTGRES_HOST_PORT}
+    # de dev) - l'accès (backup, debug) passe par "docker compose exec", jamais le réseau hôte.
+    ports: !override []
+
+  # Hub Mercure de production - absent de factu_sentinel, nécessaire ici (temps réel
+  # utilisé partout dans Cobage). Jamais de port hôte publié : exposé au navigateur via le
+  # nginx-pont (location /.well-known/mercure/, SSE) - jamais un second routeur Traefik.
+  mercure:
+    restart: unless-stopped
+    ports: !override []
+    environment:
+      SERVER_NAME: ':80'
+      MERCURE_PUBLISHER_JWT_KEY: '${MERCURE_JWT_SECRET}'
+      MERCURE_SUBSCRIBER_JWT_KEY: '${MERCURE_SUBSCRIBER_JWT_KEY}'
+      # Nécessaire pour que le hub tienne compte des en-têtes X-Forwarded-* posés par le
+      # nginx-pont (docker/nginx/prod.conf.template) - documentation officielle Mercure
+      # (mercure.rocks/docs/hub/nginx), jamais actif par défaut.
+      USE_FORWARDED_HEADERS: '1'
+      MERCURE_EXTRA_DIRECTIVES: |
+        cors_origins ${FRONTEND_URL}
+
+  # N'est plus l'edge public depuis l'introduction de Traefik : ne publie plus de port
+  # hôte, ne termine plus le TLS. Traefik route vers ce service en HTTP interne sur le
+  # réseau externe partagé "traefik-public" - nginx reste le pont HTTP -> FastCGI/proxy
+  # vers "backend"/"frontend"/"mercure".
+  nginx:
+    restart: unless-stopped
+    volumes: !override
+      - ./docker/nginx/prod.conf.template:/etc/nginx/templates/default.conf.template:ro
+    ports: !override []
+    environment:
+      PUBLIC_DOMAIN: '${PUBLIC_DOMAIN}'
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://localhost/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - default
+      - traefik-public
+    # "observability-shared" (cible de scrape Prometheus) n'est PAS ici - vit dans
+    # docker-compose.prod.observability.yml, chargé uniquement en production.
+    #
+    # Les labels Traefik (nom du routeur) ne sont PAS ici : Compose interpole les
+    # variables d'environnement dans les valeurs de labels, jamais dans leurs clés -
+    # Traefik traite les noms de routeurs comme des identifiants globaux sur tout le
+    # serveur, pas par projet ni par environnement. Les labels réels vivent dans
+    # docker-compose.prod.traefik.yml, propre à chaque environnement (voir
+    # docker-compose.prod.traefik.yml.example), jamais dans ce fichier générique partagé.
+
+volumes:
+  # config/jwt/*.pem - généré au démarrage par docker/entrypoint-prod.sh (bec-backend),
+  # jamais bakée dans l'image ; ce volume nommé est ce qui permet à "--skip-if-exists" de
+  # réutiliser la même paire d'un déploiement à l'autre plutôt que d'en régénérer une à
+  # chaque redémarrage de conteneur. Monté uniquement sur "backend", jamais "worker"/
+  # "scheduler" (voir leurs commentaires) - un seul écrivain, jamais deux entrypoints
+  # concurrents sur le même fichier.
+  jwt_keys:
+
+# "traefik-public" est un réseau partagé avec le socle d'infrastructure du VPS
+# (github.com/Joello61/infrastructure, hors de ce dépôt) - créé une seule fois sur le
+# serveur ("docker network create traefik-public"), jamais par ce fichier lui-même.
+# "observability-shared" n'est PAS déclaré ici (jamais staging) - voir
+# docker-compose.prod.observability.yml.
+networks:
+  traefik-public:
+    external: true
