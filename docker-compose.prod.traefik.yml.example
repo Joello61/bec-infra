@@ -1,0 +1,25 @@
+# Labels Traefik du service "nginx" - propre à CHAQUE environnement (jamais partagé entre
+# staging et production, ni entre projets). Copier en "docker-compose.prod.traefik.yml"
+# (jamais committé, voir .gitignore) à côté des secrets Infisical de cet environnement, et
+# adapter le nom de routeur pour qu'il soit UNIQUE sur tout le VPS - Traefik traite les noms
+# de routeurs comme des identifiants globaux, pas par projet Compose (Compose n'interpole
+# les variables d'environnement que dans les VALEURS de labels, jamais dans leurs clés - un
+# nom de routeur ne peut donc pas être dérivé de ${PUBLIC_DOMAIN} directement dans
+# docker-compose.prod.yml, même patron déjà documenté par factu_sentinel).
+#
+# Exemple ci-dessous pour la production - le fichier réel de staging doit utiliser un nom
+# de routeur différent (ex. "cobage-staging" plutôt que "cobage").
+#
+# Usage :
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     -f docker-compose.prod.traefik.yml [-f docker-compose.prod.observability.yml] up -d
+
+services:
+  nginx:
+    labels:
+      traefik.enable: 'true'
+      traefik.docker.network: 'traefik-public'
+      traefik.http.routers.cobage.rule: 'Host(`${PUBLIC_DOMAIN}`)'
+      traefik.http.routers.cobage.entrypoints: 'websecure'
+      traefik.http.routers.cobage.tls.certresolver: 'letsencrypt'
+      traefik.http.services.cobage.loadbalancer.server.port: '80'
