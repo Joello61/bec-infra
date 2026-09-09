@@ -1,0 +1,88 @@
+# Configuration Nginx de production - overlay docker-compose.prod.yml uniquement, jamais
+# fusionnée avec docker/nginx/dev.conf. Templée via envsubst (mécanisme officiel de
+# l'image "nginx", /etc/nginx/templates/*.template -> /etc/nginx/conf.d/*, vérifié sur la
+# documentation officielle Docker Hub) - seule ${PUBLIC_DOMAIN} y est substituée.
+#
+# TLS : terminé par Traefik (infrastructure de niveau serveur, hors de ce dépôt), jamais
+# par Nginx lui-même. Nginx n'est plus l'edge public (docker-compose.prod.yml, aucun port
+# hôte publié) - il ne sert qu'en HTTP interne sur le réseau Docker partagé
+# "traefik-public". Son rôle : pont HTTP -> FastCGI vers "backend" (Traefik ne sait pas
+# parler FastCGI), pont HTTP -> HTTP vers "frontend"/"mercure".
+#
+# En-têtes X-Forwarded-* : posés par Traefik à l'edge, transmis ici tels quels
+# ($http_x_forwarded_proto, $proxy_add_x_forwarded_for) - jamais réécrits depuis
+# $remote_addr, qui ne serait plus l'IP du visiteur mais celle du conteneur Traefik.
+
+client_max_body_size 20m;
+
+# 127.0.0.11 : résolveur DNS interne de Docker. "valid=10s" + variable dans
+# fastcgi_pass/proxy_pass (plutôt qu'un nom de service en dur) forcent une résolution
+# dynamique à chaque expiration du TTL - un "docker compose up -d --force-recreate backend"
+# change l'IP interne du conteneur, un nom en dur resterait figé sur l'ancienne IP jusqu'au
+# prochain rechargement de nginx (502 "Connection refused"/"Bad Gateway", même piège déjà
+# documenté et corrigé pour le nginx de dev, Phase D0).
+resolver 127.0.0.11 valid=10s;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${PUBLIC_DOMAIN};
+
+    # Route de santé Symfony, hors du préfixe /api/ (src/Controller/HealthController.php,
+    # vérifié dans le code - jamais /api/health).
+    location = /health {
+        set $backend_upstream backend:9000;
+        fastcgi_pass $backend_upstream;
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME /app/public/index.php;
+        fastcgi_param DOCUMENT_ROOT /app/public;
+        fastcgi_param HTTP_X_FORWARDED_FOR $proxy_add_x_forwarded_for;
+        fastcgi_param HTTP_X_FORWARDED_PROTO $http_x_forwarded_proto;
+    }
+
+    # Backend Symfony (API REST) - point d'entrée unique (front controller). SCRIPT_FILENAME
+    # et DOCUMENT_ROOT sont figés sur le chemin interne du conteneur "backend" (WORKDIR /app,
+    # bec-backend/Dockerfile) : ce conteneur nginx n'a jamais besoin d'accès au code source
+    # PHP, uniquement au protocole FastCGI.
+    location /api/ {
+        set $backend_upstream backend:9000;
+        fastcgi_pass $backend_upstream;
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME /app/public/index.php;
+        fastcgi_param DOCUMENT_ROOT /app/public;
+        fastcgi_param HTTP_X_FORWARDED_FOR $proxy_add_x_forwarded_for;
+        fastcgi_param HTTP_X_FORWARDED_PROTO $http_x_forwarded_proto;
+    }
+
+    # Hub Mercure (temps réel) - Phase D1/D2, absent du patron factu_sentinel. Directives
+    # reprises telles quelles de la documentation officielle Mercure
+    # (mercure.rocks/docs/hub/nginx) : "proxy_buffering off" est nécessaire aux réponses
+    # SSE (Server-Sent Events), qui ne se terminent jamais tant que le client reste
+    # connecté - un buffering activé retarderait chaque message jusqu'à ce que le buffer
+    # se remplisse. "proxy_read_timeout 24h" évite que nginx ne coupe une connexion SSE
+    # longue durée au bout du timeout par défaut (60s).
+    location /.well-known/mercure {
+        set $mercure_upstream http://mercure;
+        proxy_pass $mercure_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_read_timeout 24h;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+    }
+
+    # Frontend Next.js.
+    location / {
+        set $frontend_upstream http://frontend:3000;
+        proxy_pass $frontend_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+    }
+}
