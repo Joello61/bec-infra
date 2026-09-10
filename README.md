@@ -30,6 +30,18 @@ Si un PostgreSQL local tourne déjà sur le port 5432, définir `POSTGRES_HOST_P
 
 Les secrets applicatifs réels (OAuth, Twilio, `JWT_PASSPHRASE`, Mercure...) vivent dans `bec-backend/.env` et `bec-frontend/.env.local` (gitignorés), montés en volume — jamais dupliqués ici.
 
+## Créer le premier administrateur
+
+Aucun endpoint API ne permet de créer un `ROLE_ADMIN` (l'API de gestion des rôles exige déjà d'être admin — problème de l'œuf et de la poule sur une base neuve, cf. `bec-docs/docs/plan-correction/plan-correction-cobage.md`, Phase 7b-B). Étape manuelle, à faire une fois par environnement :
+
+```bash
+# 1. Créer un compte normal via l'UI (http://localhost:8000/auth/register) ou l'API
+# 2. Le promouvoir administrateur
+docker compose exec backend php bin/console app:user:promote-admin admin@example.com
+```
+
+Opération inverse en dernier recours (incident de sécurité, etc.) : `app:user:revoke-admin <email>` (refuse de retirer le dernier admin sans `--force`). Les deux commandes ne sont accessibles qu'en CLI, jamais via HTTP.
+
 ## Lancer les tests backend
 
 Toujours dans le conteneur `backend`, jamais avec un PHP/PostgreSQL natif sur la machine hôte (c'est tout le sens de la portabilité de la Phase D0). `config/packages/doctrine.yaml` de `bec-backend` isole automatiquement la base de test par suffixe (`dbname_suffix: _test`), mais cette base n'existe pas tant qu'elle n'a pas été créée une première fois sur le volume Postgres du compose :
