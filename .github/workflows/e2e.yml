@@ -64,6 +64,27 @@ jobs:
       - name: Prepare bec-backend/.env
         run: cp bec-backend/.env.dist bec-backend/.env
 
+      # app:import-geodata (ci-dessous) lit ces deux fichiers depuis bec-backend/var/data/
+      # (ImportGeoDataCommand.php) - "var/" est gitignore (patron Symfony standard), jamais
+      # present sur un checkout CI, contrairement a un poste de dev ou ils ont ete
+      # telecharges une fois manuellement (README.md, section demarrage). Mis en cache : ce
+      # sont des exports GeoNames statiques (pas de mise a jour continue), pas la peine de
+      # re-telecharger ~8 Mo a chaque run.
+      - name: Cache GeoNames data
+        id: cache-geonames
+        uses: actions/cache@v4
+        with:
+          path: bec-backend/var/data
+          key: geonames-countryinfo-cities15000-v1
+
+      - name: Download GeoNames data (pays/villes)
+        if: steps.cache-geonames.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p bec-backend/var/data
+          curl -sf -o bec-backend/var/data/countryInfo.txt https://download.geonames.org/export/dump/countryInfo.txt
+          curl -sf -o /tmp/cities15000.zip https://download.geonames.org/export/dump/cities15000.zip
+          unzip -o -d bec-backend/var/data /tmp/cities15000.zip cities15000.txt
+
       - name: Build images (docker compose)
         working-directory: bec-infra
         run: docker compose build
