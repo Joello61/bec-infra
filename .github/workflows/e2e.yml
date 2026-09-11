@@ -85,6 +85,16 @@ jobs:
           curl -sf -o /tmp/cities15000.zip https://download.geonames.org/export/dump/cities15000.zip
           unzip -o -d bec-backend/var/data /tmp/cities15000.zip cities15000.txt
 
+      # bec-frontend/node_modules et .next sont des volumes NOMMES montes sur le bind mount
+      # ../bec-frontend:/app (docker-compose.yml, service frontend) - s'ils n'existent pas
+      # deja sur l'hote au moment du premier "docker compose up", le daemon Docker (root)
+      # cree lui-meme ces points de montage manquants, ce qui les rend root:root sur l'hote.
+      # L'etape "Install frontend dependencies" (npm ci) plus bas tourne directement sur le
+      # runner (pas dans un conteneur) et echouait alors en EACCES en voulant y ecrire.
+      # Les creer nous-memes avant, avec l'utilisateur du runner, evite ce piege.
+      - name: Prepare bec-frontend host directories (evite un node_modules root-owned)
+        run: mkdir -p bec-frontend/node_modules bec-frontend/.next
+
       - name: Build images (docker compose)
         working-directory: bec-infra
         run: docker compose build
