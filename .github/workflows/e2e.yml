@@ -1,0 +1,136 @@
+name: E2E (reusable)
+
+# Workflow reutilisable (Phase 11, plan-correction-cobage.md) : bec-infra est le proprietaire
+# naturel de la stack complete (docker-compose.yml) sur laquelle repose l'E2E - appele depuis
+# bec-backend et bec-frontend (uses: Joello61/bec-infra/.github/workflows/e2e.yml@main).
+# Necessite la policy d'acces cross-repo activee sur ce depot (Settings > Actions > Access,
+# ou "gh api -X PUT repos/Joello61/bec-infra/actions/permissions/access -f access_level=user").
+#
+# V1 volontairement simple : docker compose build sans cache GHA (verifier d'abord que le
+# workflow fonctionne de bout en bout avant d'optimiser la vitesse de ce job specifique -
+# le cache Docker/GHA pourra etre ajoute dans un lot separe une fois la base validee).
+
+on:
+  workflow_call:
+    inputs:
+      backend_ref:
+        description: "Ref (branche/SHA) de bec-back a tester"
+        type: string
+        default: main
+      frontend_ref:
+        description: "Ref (branche/SHA) de bec-front a tester"
+        type: string
+        default: main
+
+jobs:
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Base de donnees ephemere (detruite a la fin du job) - pas un vrai secret, credentials
+      # dedies a ce job uniquement, jamais reutilises hors CI.
+      E2E_ADMIN_EMAIL: e2e-ci-admin@example.test
+      E2E_ADMIN_PASSWORD: CiE2eAdminPassword1
+    steps:
+      - name: Checkout bec-infra
+        uses: actions/checkout@v7
+        with:
+          path: bec-infra
+
+      - name: Checkout bec-backend
+        uses: actions/checkout@v7
+        with:
+          repository: Joello61/bec-back
+          ref: ${{ inputs.backend_ref }}
+          path: bec-backend
+
+      - name: Checkout bec-frontend
+        uses: actions/checkout@v7
+        with:
+          repository: Joello61/bec-front
+          ref: ${{ inputs.frontend_ref }}
+          path: bec-frontend
+
+      # bec-backend/.env est gitignore (secrets reels) - .env.dist (commite, valeurs
+      # placeholder deja adaptees au dev/E2E : JWT_COOKIE_DOMAIN=localhost,
+      # SMS_VERIFICATION_ENABLED=false, EMAIL_VERIFICATION_ENABLED=false) en tient lieu ici,
+      # meme patron que le README de ce depot pour un nouvel environnement.
+      - name: Prepare bec-backend/.env
+        run: cp bec-backend/.env.dist bec-backend/.env
+
+      - name: Build images (docker compose)
+        working-directory: bec-infra
+        run: docker compose build
+
+      - name: Start stack
+        working-directory: bec-infra
+        run: docker compose up -d --wait
+
+      - name: Run migrations
+        working-directory: bec-infra
+        run: docker compose exec -T backend php bin/console doctrine:migrations:migrate --no-interaction
+
+      # Donnees geo/devises requises par la completion de profil (AddressService) - patron
+      # deja documente dans README.md pour un environnement de dev neuf.
+      - name: Seed geo data
+        working-directory: bec-infra
+        run: docker compose exec -T backend php -d memory_limit=1G bin/console app:import-geodata
+
+      - name: Seed currencies
+        working-directory: bec-infra
+        run: docker compose exec -T backend php bin/console app:seed:currency
+
+      # Compte admin fixe pour la suite E2E (fixture adminPage, bec-frontend/e2e/support/
+      # fixtures.ts) - seule porte d'entree pour un ROLE_ADMIN, cf. app:user:promote-admin
+      # (bec-infra/README.md, section "Creer le premier administrateur").
+      - name: Seed E2E admin account
+        run: |
+          curl -sf -X POST http://localhost:8000/api/register \
+            -H "Content-Type: application/json" \
+            -d "{\"nom\":\"E2E\",\"prenom\":\"Admin\",\"email\":\"${E2E_ADMIN_EMAIL}\",\"password\":\"${E2E_ADMIN_PASSWORD}\"}"
+          docker compose -f bec-infra/docker-compose.yml exec -T backend \
+            php bin/console app:user:promote-admin "${E2E_ADMIN_EMAIL}" --no-interaction
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: bec-frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: bec-frontend
+        run: npm ci
+
+      # Cache des binaires Playwright (independant du cache npm ci-dessus, qui ne couvre
+      # que node_modules) - cle sur la version exacte de @playwright/test.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bec-frontend/package-lock.json') }}
+
+      - name: Install Playwright browsers
+        working-directory: bec-frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        working-directory: bec-frontend
+        env:
+          E2E_ADMIN_EMAIL: ${{ env.E2E_ADMIN_EMAIL }}
+          E2E_ADMIN_PASSWORD: ${{ env.E2E_ADMIN_PASSWORD }}
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: bec-frontend/playwright-report/
+          retention-days: 7
+
+      - name: Stop stack
+        if: always()
+        working-directory: bec-infra
+        run: docker compose down -v
