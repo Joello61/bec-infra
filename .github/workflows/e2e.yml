@@ -36,6 +36,11 @@ jobs:
       - name: Checkout bec-infra
         uses: actions/checkout@v7
         with:
+          # repository explicite obligatoire : dans un workflow reutilisable, actions/checkout
+          # sans "repository:" retombe sur github.repository, qui vaut le depot APPELANT
+          # (bec-back/bec-front) et non celui hebergeant ce fichier - constate en CI, le
+          # checkout se faisait silencieusement sur le mauvais depot (docker-compose.yml absent).
+          repository: Joello61/bec-infra
           path: bec-infra
 
       - name: Checkout bec-backend
