@@ -172,6 +172,28 @@ jobs:
           path: bec-frontend/playwright-report/
           retention-days: 7
 
+      # Sans ceci, un 500 cote API pendant l'E2E n'est diagnosticable qu'au message
+      # d'assertion Playwright ("Echec X API: 500") - aucune trace applicative, les
+      # conteneurs etant detruits par "docker compose down -v" juste apres (if: always()
+      # ci-dessous). Uploade meme en succes (cout negligeable, utile en cas d'echec
+      # intermittent non rejoue).
+      - name: Dump backend/worker logs (diagnostic)
+        if: always()
+        working-directory: bec-infra
+        run: |
+          mkdir -p /tmp/container-logs
+          docker compose logs backend > /tmp/container-logs/backend.log 2>&1 || true
+          docker compose logs worker > /tmp/container-logs/worker.log 2>&1 || true
+          docker compose logs scheduler > /tmp/container-logs/scheduler.log 2>&1 || true
+
+      - name: Upload container logs (diagnostic)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-logs
+          path: /tmp/container-logs/
+          retention-days: 7
+
       - name: Stop stack
         if: always()
         working-directory: bec-infra
