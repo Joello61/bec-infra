@@ -111,11 +111,17 @@ jobs:
       # fixtures.ts) - seule porte d'entree pour un ROLE_ADMIN, cf. app:user:promote-admin
       # (bec-infra/README.md, section "Creer le premier administrateur").
       - name: Seed E2E admin account
+        working-directory: bec-infra
+        # "docker compose exec" (sans -f explicite, contrairement a une version precedente
+        # de cette etape) : docker-compose.override.yml (service mailpit) n'est fusionne
+        # automatiquement que sans -f (cf. son propre commentaire) - un -f explicite ne
+        # listant que docker-compose.yml cassait ce merge ("depends on undefined service
+        # mailpit"), constate en CI.
         run: |
           curl -sf -X POST http://localhost:8000/api/register \
             -H "Content-Type: application/json" \
             -d "{\"nom\":\"E2E\",\"prenom\":\"Admin\",\"email\":\"${E2E_ADMIN_EMAIL}\",\"password\":\"${E2E_ADMIN_PASSWORD}\"}"
-          docker compose -f bec-infra/docker-compose.yml exec -T backend \
+          docker compose exec -T backend \
             php bin/console app:user:promote-admin "${E2E_ADMIN_EMAIL}" --no-interaction
 
       - name: Set up Node.js 22
