@@ -61,8 +61,21 @@ jobs:
       # placeholder deja adaptees au dev/E2E : JWT_COOKIE_DOMAIN=localhost,
       # SMS_VERIFICATION_ENABLED=false, EMAIL_VERIFICATION_ENABLED=false) en tient lieu ici,
       # meme patron que le README de ce depot pour un nouvel environnement.
+      # .env.dist est le scaffold Symfony brut (APP_ENV=prod, APP_DEBUG=0 - patron par
+      # defaut de symfony/framework-bundle, jamais modifie depuis), pas une config dev/E2E
+      # prete a l'emploi malgre le reste de ses valeurs deja adaptees (JWT_COOKIE_DOMAIN,
+      # SMS/EMAIL_VERIFICATION_ENABLED). docker-compose.yml (service backend) ne surcharge
+      # jamais APP_ENV/APP_DEBUG lui-meme (delibere, cf. son propre commentaire : ces deux
+      # variables sont censees deja etre correctes dans .env) - copier .env.dist tel quel
+      # faisait tourner le backend en prod (fingers_crossed sur "error", ecrit dans
+      # var/log/prod.log au lieu de stdout) : tout echec HTTP 500 restait invisible dans
+      # "docker compose logs", constate lors du premier vrai run E2E ("Echec completion
+      # profil API: 500" x5, aucune trace exploitable meme apres ajout du dump de logs).
       - name: Prepare bec-backend/.env
-        run: cp bec-backend/.env.dist bec-backend/.env
+        run: |
+          cp bec-backend/.env.dist bec-backend/.env
+          sed -i 's/^APP_ENV=prod$/APP_ENV=dev/' bec-backend/.env
+          sed -i 's/^APP_DEBUG=0$/APP_DEBUG=1/' bec-backend/.env
 
       # app:import-geodata (ci-dessous) lit ces deux fichiers depuis bec-backend/var/data/
       # (ImportGeoDataCommand.php) - "var/" est gitignore (patron Symfony standard), jamais
