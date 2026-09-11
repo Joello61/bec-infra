@@ -105,8 +105,20 @@ jobs:
       # L'etape "Install frontend dependencies" (npm ci) plus bas tourne directement sur le
       # runner (pas dans un conteneur) et echouait alors en EACCES en voulant y ecrire.
       # Les creer nous-memes avant, avec l'utilisateur du runner, evite ce piege.
-      - name: Prepare bec-frontend host directories (evite un node_modules root-owned)
-        run: mkdir -p bec-frontend/node_modules bec-frontend/.next
+      # Meme piege que node_modules/.next ci-dessus, une autre victime : nginx (docker-
+      # compose.yml) bind-mount ../bec-backend/public/uploads:/usr/share/nginx/uploads:ro,
+      # repertoire gitignore (donnees utilisateur) et jamais cree par
+      # docker/entrypoint-dev.sh du backend - absent sur un checkout CI neuf, Docker le
+      # cree comme root des le demarrage de nginx, avant que le backend (php-fpm, non-root)
+      # n'y ecrive au premier avatar. Constate via var/log/dev.log (backend.log seul, sur
+      # stdout, ne montre jamais les erreurs applicatives - cf. le fix precedent APP_ENV) :
+      # "UnableToCreateDirectory ... mkdir(): Permission denied" sur TOUT
+      # /api/users/me/complete-profile, meme sans upload d'avatar (le composant verifie/
+      # cree ce repertoire de toute facon).
+      - name: Prepare host directories (evite des mountpoints root-owned)
+        run: |
+          mkdir -p bec-frontend/node_modules bec-frontend/.next
+          mkdir -p bec-backend/public/uploads/avatars
 
       - name: Build images (docker compose)
         working-directory: bec-infra
