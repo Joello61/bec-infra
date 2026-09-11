@@ -177,6 +177,11 @@ jobs:
       # conteneurs etant detruits par "docker compose down -v" juste apres (if: always()
       # ci-dessous). Uploade meme en succes (cout negligeable, utile en cas d'echec
       # intermittent non rejoue).
+      # monolog.yaml (bec-backend, when@dev) : le handler "main" (level: debug, toutes les
+      # erreurs applicatives y compris les 500) ecrit dans var/log/dev.log - PAS sur
+      # stdout/stderr (seul le handler "console", filtre sur "!doctrine"/"!console", y
+      # ecrit). "docker compose logs" seul ne voit donc jamais les exceptions HTTP 500,
+      # seulement les logs d'acces bruts - necessite un "docker compose exec cat" distinct.
       - name: Dump backend/worker logs (diagnostic)
         if: always()
         working-directory: bec-infra
@@ -185,6 +190,7 @@ jobs:
           docker compose logs backend > /tmp/container-logs/backend.log 2>&1 || true
           docker compose logs worker > /tmp/container-logs/worker.log 2>&1 || true
           docker compose logs scheduler > /tmp/container-logs/scheduler.log 2>&1 || true
+          docker compose exec -T backend cat var/log/dev.log > /tmp/container-logs/backend-dev.log 2>&1 || true
 
       - name: Upload container logs (diagnostic)
         if: always()
