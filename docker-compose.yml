@@ -140,7 +140,16 @@ services:
     volumes:
       - ../bec-backend:/app
       - backend_vendor:/app/vendor
+    # "backend" en depends_on (pas seulement postgres/mercure/mailpit) : "backend_vendor"
+    # est un volume nommé vide au premier démarrage, peuplé depuis l'image par Docker au
+    # premier montage. "worker" partageait ce volume sans attendre "backend", donc les
+    # deux conteneurs déclenchaient ce peuplement en parallèle - constaté en CI (E2E),
+    # échec aléatoire "failed to mkdir .../vendor/... file exists" (course entre deux
+    # copy-up concurrents du même volume). Attendre que "backend" soit healthy (le
+    # peuplement y est déjà terminé, cf. HEALTHCHECK ci-dessous) le sérialise.
     depends_on:
+      backend:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       mercure:
@@ -182,6 +191,8 @@ services:
       - ../bec-backend:/app
       - backend_vendor:/app/vendor
     depends_on:
+      backend:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       mercure:
