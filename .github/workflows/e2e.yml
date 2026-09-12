@@ -142,6 +142,13 @@ jobs:
         working-directory: bec-infra
         run: docker compose exec -T backend php bin/console app:seed:currency
 
+      # Requis par le quota freemium (VoyageVoter/DemandeVoter::canCreate(), monetisation
+      # Lot 1) - sans le plan "free", toute creation de voyage/demande echoue en 500
+      # (SubscriptionService::getEffectivePlan() ne trouve aucun plan par defaut).
+      - name: Seed subscription plans
+        working-directory: bec-infra
+        run: docker compose exec -T backend php bin/console app:seed:subscription-plans
+
       # Compte admin fixe pour la suite E2E (fixture adminPage, bec-frontend/e2e/support/
       # fixtures.ts) - seule porte d'entree pour un ROLE_ADMIN, cf. app:user:promote-admin
       # (bec-infra/README.md, section "Creer le premier administrateur").
