@@ -85,6 +85,19 @@ services:
       R2_SECRET_ACCESS_KEY: '${R2_SECRET_ACCESS_KEY}'
       R2_BUCKET: '${R2_BUCKET}'
       R2_PUBLIC_URL: '${R2_PUBLIC_URL}'
+      # Monetisation (bec-docs/docs/monetisation/monetisation-cobage.md §7) - uniquement
+      # "backend" : SubscriptionController/BoostController/AdminTransactionController (HTTP)
+      # et StripeWebhookConsumer/NotchPayWebhookConsumer (symfony/webhook, traite la requete
+      # webhook de facon synchrone dans le meme process, jamais dispatche vers "worker").
+      # ExpireNotchPaySubscriptionsHandler/SendRenewalReminderHandler (worker/scheduler)
+      # n'appellent aucun des deux providers - uniquement de la lecture DB + email.
+      STRIPE_SECRET_KEY: '${STRIPE_SECRET_KEY}'
+      STRIPE_WEBHOOK_SECRET: '${STRIPE_WEBHOOK_SECRET}'
+      STRIPE_PRICE_ID_PLUS: '${STRIPE_PRICE_ID_PLUS}'
+      STRIPE_PRICE_ID_PRO: '${STRIPE_PRICE_ID_PRO}'
+      NOTCHPAY_SECRET_KEY: '${NOTCHPAY_SECRET_KEY}'
+      NOTCHPAY_WEBHOOK_SECRET: '${NOTCHPAY_WEBHOOK_SECRET}'
+      NOTCHPAY_PRIVATE_KEY: '${NOTCHPAY_PRIVATE_KEY}'
     restart: unless-stopped
     # "observability-shared" (export OTLP vers "tempo:4318") n'est PAS ici - vit dans
     # docker-compose.prod.observability.yml, chargé uniquement en production (voir ce
