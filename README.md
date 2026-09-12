@@ -21,6 +21,7 @@ docker compose exec backend php bin/console doctrine:migrations:migrate --no-int
 docker compose exec backend php -d memory_limit=1G bin/console app:import-geodata          # première fois uniquement (~3 min, ~40k villes)
 docker compose exec backend php bin/console app:seed:currency                              # première fois uniquement
 docker compose exec backend php bin/console app:seed:subscription-plans                    # première fois uniquement
+docker compose exec backend php bin/console app:seed:boost-offers                          # première fois uniquement
 ```
 
 Application disponible sur `http://localhost:8000` — toujours ce nom d'hôte, jamais `127.0.0.1` : `JWT_COOKIE_DOMAIN=localhost` (`bec-backend/.env`) fait qu'un cookie de session posé pour `localhost` n'est jamais envoyé par le navigateur à `127.0.0.1`, malgré la même boucle locale (constaté en Phase 7b-A, `bec-docs/docs/plan-correction/plan-correction-cobage.md`). Hub Mercure sur `http://localhost:3001/.well-known/mercure`. Emails capturés par Mailpit (jamais livrés réellement) sur `http://localhost:8025`.

@@ -149,6 +149,14 @@ jobs:
         working-directory: bec-infra
         run: docker compose exec -T backend php bin/console app:seed:subscription-plans
 
+      # Catalogue des offres de boost (monetisation Lot 2) - fail-open cote
+      # VoyageVoter/DemandeVoter (contrairement au plan freemium), donc pas de risque de
+      # 500 sur la creation si absent, mais necessaire pour tout scenario E2E qui achete
+      # ou affiche un boost.
+      - name: Seed boost offers
+        working-directory: bec-infra
+        run: docker compose exec -T backend php bin/console app:seed:boost-offers
+
       # Compte admin fixe pour la suite E2E (fixture adminPage, bec-frontend/e2e/support/
       # fixtures.ts) - seule porte d'entree pour un ROLE_ADMIN, cf. app:user:promote-admin
       # (bec-infra/README.md, section "Creer le premier administrateur").
