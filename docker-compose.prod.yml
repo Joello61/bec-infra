@@ -23,7 +23,7 @@
 #   CORS_ALLOW_ORIGIN, FRONTEND_URL, POSTGRES_*, MAILER_DSN/MAILER_FROM,
 #   APP_SECRET, JWT_PASSPHRASE, METRICS_SCRAPE_TOKEN, TEMPO_OTLP_ENDPOINT,
 #   MERCURE_JWT_SECRET/MERCURE_SUBSCRIBER_JWT_KEY, R2_ENDPOINT/R2_ACCESS_KEY_ID/
-#   R2_SECRET_ACCESS_KEY/R2_BUCKET/R2_PUBLIC_URL.
+#   R2_SECRET_ACCESS_KEY/R2_BUCKET/R2_PUBLIC_URL/R2_INVOICES_BUCKET.
 #
 # Rappels vérifiés avec "docker compose config" (jamais supposés) :
 # - La fusion par défaut de Compose pour les listes ("ports", "volumes", "networks") est un
@@ -85,6 +85,10 @@ services:
       R2_SECRET_ACCESS_KEY: '${R2_SECRET_ACCESS_KEY}'
       R2_BUCKET: '${R2_BUCKET}'
       R2_PUBLIC_URL: '${R2_PUBLIC_URL}'
+      # Lot N4 (monetisation) - bucket R2 distinct pour les factures PDF, jamais mappe sur
+      # un domaine public (contrairement a R2_BUCKET/R2_PUBLIC_URL ci-dessus) : uniquement
+      # "backend" (TransactionController::invoice()), jamais worker/scheduler.
+      R2_INVOICES_BUCKET: '${R2_INVOICES_BUCKET}'
       # Monetisation (bec-docs/docs/monetisation/monetisation-cobage.md §7) - uniquement
       # "backend" : SubscriptionController/BoostController/AdminTransactionController (HTTP)
       # et StripeWebhookConsumer/NotchPayWebhookConsumer (symfony/webhook, traite la requete
